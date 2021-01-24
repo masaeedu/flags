@@ -232,4 +232,4 @@ flagTable columns =
 
 -- Tests
 message :: String
-message = unlines $ flagTable $ VCons "foo" $ VCons "bar" $ VCons "baz" $ VNil
+message = unlines $ flagTable $ VCons "1" $ VCons "a" $ VCons "b" $ VCons "a × b" $ VNil
