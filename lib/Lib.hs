@@ -1,15 +1,21 @@
 {-# LANGUAGE StandaloneKindSignatures, TypeFamilies, FunctionalDependencies, DeriveFoldable, UndecidableSuperClasses #-}
-{-# OPTIONS_GHC -freduction-depth=0 #-}
+-- {-# OPTIONS_GHC -freduction-depth=0 #-}
 module Lib where
 
 import Data.Kind (Type, Constraint)
 import Data.Proxy (Proxy(..))
+import Data.Foldable (toList)
+import Data.List (intercalate, intersperse)
+import Data.Bifunctor (first)
+import Control.Applicative (liftA2)
 
 -- Some utilities
 type (.==) :: (a -> Constraint) -> a -> Constraint
 type f .== a = f a
 
 infix 4 .==
+
+class (forall x. c x) => Total c
 
 data Some (c :: x -> Constraint)
   where
@@ -23,15 +29,15 @@ class (f x .== y) => (f $ x) y | f x -> y
 
 class (forall x y. f x y => (f $ x) .== y) => Function f
 
-evaluate :: Function f => Proxy f -> Proxy x -> Some (f x)
-evaluate f x = Some Proxy (f x)
+-- evaluate :: Function f => Proxy f -> Proxy x -> Some (f x)
+-- evaluate f x = Some Proxy (f x)
 
 type Reflect :: Type -> Constraint
 class Reflect k
   where
   type Rep k :: k -> *
   reflect :: Rep k v -> k
-  promote :: (forall x. c x) => Proxy c -> (forall x. c x => Rep k x -> r) -> k -> r
+  promote :: Total c => Proxy c -> (forall x. c x => Rep k x -> r) -> k -> r
   -- promoteF :: Function f => Proxy f -> (forall x y. f x y => Rep k x -> r) -> k -> r
 
 -- Natural numbers
@@ -54,6 +60,12 @@ type N13 = 'S N12
 type N14 = 'S N13
 type N15 = 'S N14
 type N16 = 'S N15
+
+-- Upper-bounded natural numbers
+data Fin n
+  where
+  FZ :: Fin ('S n)
+  FS :: Fin n -> Fin ('S n)
 
 -- Natural numbers singletons
 data SNat n
@@ -89,7 +101,7 @@ n15 = SS n14
 n16 = SS n15
 
 -- We're going to do all our type level computation with typeclasses
--- Induction for all the "binary operators" will be on the right term
+-- Induction for all the "binary operators" will be on the left term
 
 -- Addition
 type (+) :: Nat -> Nat -> Nat -> Constraint
@@ -97,10 +109,10 @@ class (n + m) r | n m -> r
 
 infixl 6 +
 
-instance (n + N0) n
--- instance (N0 + m) m
-instance (n + m .== r) => (n + 'S m) ('S r)
--- instance (n + m .== r) => ('S n + m) ('S r)
+-- instance (n + N0) n
+instance (N0 + m) m
+-- instance (n + m .== r) => (n + 'S m) ('S r)
+instance (n + m .== r) => ('S n + m) ('S r)
 
 -- Multiplication
 type (×) :: Nat -> Nat -> Nat -> Constraint
@@ -108,10 +120,10 @@ class (n × m) r | n m -> r
 
 infixl 7 ×
 
-instance (n × N0) N0
--- instance (N0 × m) N0
-instance (n × m .== r, n + r .== r') => (n × 'S m) r'
--- instance (n × m .== r, m + r .== r') => ('S n × m) r'
+-- instance (n × N0) N0
+instance (N0 × m) N0
+-- instance (n × m .== r, n + r .== r') => (n × 'S m) r'
+instance (n × m .== r, m + r .== r') => ('S n × m) r'
 
 -- Exponentiation
 type (^) :: Nat -> Nat -> Nat -> Constraint
@@ -128,57 +140,96 @@ data Vec n a
   VNil :: Vec N0 a
   VCons :: a -> Vec n a -> Vec ('S n) a
 
-deriving instance Functor (Vec n)
+deriving instance Show a => Show (Vec n a)
 deriving instance Foldable (Vec n)
+deriving instance Functor (Vec n)
+
+instance Applicative (Vec N0)
+  where
+  pure _ = VNil
+  liftA2 _ VNil VNil = VNil
+
+instance Applicative (Vec n) => Applicative (Vec ('S n))
+  where
+  pure a = VCons a $ pure a
+  liftA2 f (VCons a v1) (VCons b v2) = VCons (f a b) $ liftA2 f v1 v2
+
+vlength :: Vec n a -> SNat n
+vlength VNil = SZ
+vlength (VCons _ v) = SS $ vlength v
+
+vindex :: Fin n -> Vec n a -> a
+vindex FZ (VCons a _) = a
+vindex (FS n) (VCons _ v) = vindex n v
+
+vindexed :: Vec n a -> Vec n (Fin n, a)
+vindexed VNil = VNil
+vindexed (VCons a v) = (FZ, a) `VCons` fmap (first FS) (vindexed v)
 
 class (n1 + n2 .== n3) => VAppend n1 n2 n3 | n1 n2 -> n3
   where
   vappend :: Vec n1 a -> Vec n2 a -> Vec n3 a
 
-instance VAppend n N0 n
-  where
-  vappend v VNil = v
-
--- instance VAppend N0 n n
+-- instance VAppend n N0 n
 --   where
---   vappend VNil v = v
+--   vappend v VNil = v
 
-instance VAppend n m r => VAppend n ('S m) ('S r)
+instance VAppend N0 n n
   where
-  vappend v1 (VCons a v2) = VCons a $ vappend v1 v2
+  vappend VNil v = v
 
--- instance VAppend n m r => VAppend ('S n) m ('S r)
+-- instance VAppend n m r => VAppend n ('S m) ('S r)
 --   where
---   vappend (VCons a v1) v2 = VCons a $ vappend v1 v2
+--   vappend v1 (VCons a v2) = VCons a $ vappend v1 v2
+
+instance VAppend n m r => VAppend ('S n) m ('S r)
+  where
+  vappend (VCons a v1) v2 = VCons a $ vappend v1 v2
 
 -- Produce a feature matrix
-class (N2 ^ n .== r) => Toggles n r | n -> r
+class (N2 ^ n .== r) => Flags n r | n -> r
   where
-  toggles :: SNat n -> Vec r (Vec n Bool)
+  flags :: SNat n -> Vec r (Vec n Bool)
 
-instance Toggles n r => (Toggles $ n) r
-instance Function Toggles
+instance Flags n r => (Flags $ n) r
+instance Function Flags
 
-instance Toggles N0 N1 
+instance Flags N0 N1 
   where
-  toggles SZ = VNil `VCons` VNil
+  flags SZ = VNil `VCons` VNil
 
-instance (Toggles n r, VAppend r r r', (N2 × r) .== r') => Toggles ('S n) r'
+instance (Flags n r, VAppend r r r', (N2 × r) .== r') => Flags ('S n) r'
   where
-  toggles (SS n) =
+  flags (SS n) =
     let
-      rest = toggles n
+      rest = flags n
     in (VCons False <$> rest) `vappend` (VCons True <$> rest)
 
+padToWidth :: Int -> String -> String
+padToWidth i s
+  | length s > i  = error "length of string to pad must be <= padded length"
+  | otherwise = s <> replicate (i - length s) ' '
+
+displayFlag :: Bool -> String
+displayFlag False = " "
+displayFlag True = "✔" 
+
+delimit :: Foldable f => f String -> String
+delimit cs = "| " <> intercalate " | " (toList cs) <> " |"
+
+separator :: Vec n String -> String
+separator cols = "-" <> foldMap (\s -> replicate (length s + 3) '-') cols
+
+flagTable :: (Flags n r, Applicative (Vec n)) => Vec n String -> [String]
+flagTable columns =
+  let
+    ncols = vlength columns
+    widths = length <$> columns
+    header = delimit columns
+    rows = toList $ fmap delimit $ fmap (liftA2 padToWidth widths) $ (fmap . fmap) displayFlag $ flags ncols
+  in
+    intersperse (separator columns) $ header : rows
+
 -- Tests
-foo = Proxy @Toggles ^$ Proxy @N4
-
-
-test :: Vec N16 (Vec N4 Bool)
-test = toggles n4
-
--- toggleTable :: Nat -> [String]
--- toggleTable = promote _ _
-
 message :: String
-message = "Ready? Get set... GO!"
+message = unlines $ flagTable $ VCons "foo" $ VCons "bar" $ VCons "baz" $ VNil
