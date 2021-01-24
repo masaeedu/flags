@@ -200,10 +200,9 @@ instance Flags N0 N1
 
 instance (Flags n r, VAppend r r r', (N2 × r) .== r') => Flags ('S n) r'
   where
-  flags (SS n) =
-    let
-      rest = flags n
-    in (VCons False <$> rest) `vappend` (VCons True <$> rest)
+  flags (SS n) = (VCons False <$> rest) `vappend` (VCons True <$> rest)
+    where
+    rest = flags n
 
 padToWidth :: Int -> String -> String
 padToWidth i s
